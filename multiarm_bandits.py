@@ -1,4 +1,5 @@
 import random
+import math
 import numpy as np
 from dataclasses import dataclass
 
@@ -11,12 +12,14 @@ class KArmBanditsConfig:
     reward_std: float = 1.0
     epsilon: float = 0.0
 
+
 @dataclass
 class KArmNonstationaryBanditsConfig:
     k: int
     reward: float = 1.0
     reward_std: float = 0.5
     epsilon: float = 0.0
+
 
 class Bandit:
     def __init__(self, reward, reward_std):
@@ -50,6 +53,7 @@ def initialize_bandits(config: KArmBanditsConfig):
         )
         bandits.append(bandit)
     return bandits
+
 
 def initialize_nonstationary_bandits(config: KArmNonstationaryBanditsConfig):
     bandits = []
@@ -88,20 +92,16 @@ class KArmBandits:
 
     def play(self, steps: int = 1000):
         avg_reward = []
-        acc_reward = 0
-        optimal_action_ratio = []
-        optimal_action_count = 0
-        for i in range(steps):
+        optimal_action = self.optimal_action
+        optimal_action_hits = []
+        for _ in range(steps):
             action = self.choose_action()
             r = self.bandits[action].get_reward()
             self.estimate(action, r)
-            acc_reward += r
-            avg_reward.append(acc_reward / (i + 1))
+            avg_reward.append(r)
+            optimal_action_hits.append(action == optimal_action)
 
-            optimal_action_count += action == self.optimal_action
-            optimal_action_ratio.append(optimal_action_count / (i + 1))
-
-        return avg_reward, optimal_action_ratio
+        return avg_reward, optimal_action_hits
 
     def reset(self):
         self.q_estimates = [0.0 for _ in range(self.k)]
@@ -119,7 +119,7 @@ class NonstationaryKArmBandits(KArmBandits):
         n = self.action_counter[action]
         prev = self.q_estimates[action]
         if self.alpha is None:
-           self.q_estimates[action] += (reward - prev) / n
+            self.q_estimates[action] += (reward - prev) / n
         else:
             self.q_estimates[action] += (reward - prev) * self.alpha
 
@@ -146,3 +146,23 @@ class NonstationaryKArmBandits(KArmBandits):
         # reset bandits' reward
         for b in self.bandits:
             b.reset_true_reward()
+
+
+class KArmBanditsUCB(KArmBandits):
+    def __init__(self, k: int, bandits, c=1):
+        # epsilon is not used.
+        super().__init__(k, epsilon=0.0, bandits=bandits)
+        self.c = c
+
+    def choose_action(self):
+        untried = [i for i, cnt in enumerate(self.action_counter) if cnt == 0]
+        if untried:
+            return random.choice(untried)
+        t = sum(self.action_counter)
+        scores = [
+            q + self.c * math.sqrt(math.log(t) / cnt)
+            for q, cnt in zip(self.q_estimates, self.action_counter)
+        ]
+        max_score = max(scores)
+        best_actions = [i for i, s in enumerate(scores) if s == max_score]
+        return random.choice(best_actions)
